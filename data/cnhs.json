@@ -1,1 +1,8 @@
-{}
+{
+  categoria: "B",
+  status: "ATIVA",
+  validade: "10/10/2026",
+  pontos: 10,
+  ultimoBonus: 0,
+  historico: []
+}
