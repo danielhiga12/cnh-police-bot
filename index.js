@@ -5,14 +5,14 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.MessageContent
   ],
 });
 
 const PREFIX = "!";
 
-// ===== CARGOS =====
-const POLICIA_CARGOS = ["Polícia", "Policial", "PM"];
+// ===== CARGOS POLÍCIA =====
+const POLICIA_CARGOS = ["Polícia", "Policial"];
 
 // ===== FUNÇÕES =====
 function load(file) {
@@ -25,232 +25,235 @@ function save(file, data) {
 function isPolicia(member) {
   return member.roles.cache.some(r => POLICIA_CARGOS.includes(r.name));
 }
-function logPolicia(guild, titulo, descricao) {
+
+// ===== DADOS =====
+let cnhs = load("./data/cnhs.json");
+let economia = load("./data/economia.json");
+let multas = load("./data/multas.json");
+let provas = load("./data/provas.json");
+
+// ===== PERGUNTAS DETRAN =====
+const perguntas = [
+  { q: "Qual a velocidade máxima em via urbana?", a: "60" },
+  { q: "Dirigir alcoolizado é infração?", a: "sim" },
+  { q: "O cinto é obrigatório?", a: "sim" },
+  { q: "Avançar sinal vermelho é permitido?", a: "não" },
+  { q: "Celular ao volante é infração?", a: "sim" },
+  { q: "Quem tem prioridade no cruzamento?", a: "direita" },
+];
+
+// ===== LOG POLÍCIA =====
+function logPolicia(guild, policial, alvo, valor, pontos) {
   const canal = guild.channels.cache.find(c => c.name === "logs-policia");
   if (!canal) return;
 
   const embed = new EmbedBuilder()
-    .setTitle(titulo)
-    .setDescription(descricao)
+    .setTitle("🚨 Multa Aplicada")
     .setColor("Red")
+    .setDescription(
+      `👮 **Policial:** ${policial.tag}
+👤 **Multado:** ${alvo.tag}
+💸 **Valor:** R$${valor}
+📊 **Pontos:** ${pontos}`
+    )
     .setTimestamp();
 
   canal.send({ embeds: [embed] });
 }
 
-// ===== DADOS =====
-let cnhs = load("./data/cnhs.json");
-let economia = load("./data/economia.json");
-
 // ===== READY =====
 client.once("ready", () => {
-  console.log(`🚓 Bot CNH + Polícia online: ${client.user.tag}`);
+  console.log(`✅ Bot CNH + Polícia online`);
 });
 
 // ===== COMANDOS =====
 client.on("messageCreate", async (message) => {
   if (!message.content.startsWith(PREFIX) || message.author.bot) return;
 
-  const args = message.content.slice(1).trim().split(/ +/g);
+  const args = message.content.slice(1).split(/ +/);
   const cmd = args.shift().toLowerCase();
   const user = message.mentions.users.first();
 
-  economia[message.author.id] ??= { carteira: 0 };
+  economia[message.author.id] ??= { carteira: 10000 };
+
+  // ===== TIRAR CNH =====
+  if (cmd === "tirarcnh") {
+    if (economia[message.author.id].carteira < 2000)
+      return message.reply("❌ Você precisa de R$2000");
+
+    economia[message.author.id].carteira -= 2000;
+    provas[message.author.id] = { acertos: 0, atual: 0 };
+
+    save("./data/economia.json", economia);
+    save("./data/provas.json", provas);
+
+    message.reply(
+      `📝 Prova iniciada!\nPergunta 1:\n**${perguntas[0].q}**\nUse: !responder sua_resposta`
+    );
+  }
+
+  // ===== RESPONDER PROVA =====
+  if (cmd === "responder") {
+    const prova = provas[message.author.id];
+    if (!prova) return message.reply("❌ Você não iniciou a prova");
+
+    const resposta = args.join(" ").toLowerCase();
+    const pergunta = perguntas[prova.atual];
+
+    if (resposta === pergunta.a) prova.acertos++;
+
+    prova.atual++;
+
+    if (prova.atual >= perguntas.length) {
+      delete provas[message.author.id];
+      save("./data/provas.json", provas);
+
+      if (prova.acertos >= 4) {
+        message.reply(
+          `✅ Aprovado!\nEscolha categoria:\n!categoria B (R$5000)\n!categoria C (R$8000)`
+        );
+      } else {
+        message.reply("❌ Reprovado. Pague novamente para refazer.");
+      }
+      return;
+    }
+
+    message.reply(
+      `Pergunta ${prova.atual + 1}:\n**${perguntas[prova.atual].q}**`
+    );
+  }
+
+  // ===== ESCOLHER CATEGORIA =====
+  if (cmd === "categoria") {
+    const cat = args[0]?.toUpperCase();
+    const custo = cat === "B" ? 5000 : cat === "C" ? 8000 : 0;
+    if (!custo) return;
+
+    if (economia[message.author.id].carteira < custo)
+      return message.reply("❌ Saldo insuficiente");
+
+    economia[message.author.id].carteira -= custo;
+    cnhs[message.author.id] = {
+      categoria: cat,
+      pontos: 20,
+      status: "ATIVA",
+      validade: Date.now() + 1000 * 60 * 60 * 24 * 30
+    };
+
+    save("./data/cnhs.json", cnhs);
+    save("./data/economia.json", economia);
+
+    message.reply(`🚗 CNH categoria ${cat} emitida com sucesso`);
+  }
 
   // ===== VER CNH =====
   if (cmd === "vercnh") {
-    const cnh = cnhs[message.author.id];
-    if (!cnh) return message.reply("❌ Você não possui CNH.");
+    const alvo = user || message.author;
+    const cnh = cnhs[alvo.id];
+    if (!cnh) return message.reply("❌ CNH não encontrada");
 
     const embed = new EmbedBuilder()
-      .setTitle("🚗 Carteira Nacional de Habilitação")
+      .setTitle("🪪 CNH")
       .setColor("Blue")
       .setDescription(
-        `📘 Categoria: **${cnh.categoria}**
-📊 Pontos: **${cnh.pontos}/20**
-📅 Validade: **${cnh.validade}**
-⚠️ Status: **${cnh.status}**`
+        `👤 ${alvo.tag}
+🚗 Categoria: ${cnh.categoria}
+📊 Pontos: ${cnh.pontos}
+📄 Status: ${cnh.status}`
       );
 
     message.channel.send({ embeds: [embed] });
   }
 
-  // ===== TIRAR CNH =====
-  if (cmd === "tirarcnh") {
-    if (cnhs[message.author.id])
-      return message.reply("❌ Você já possui CNH.");
-
-    if (economia[message.author.id].carteira < 2000)
-      return message.reply("❌ Você precisa de R$2000 para iniciar.");
-
-    economia[message.author.id].carteira -= 2000;
-
-    const perguntas = [
-      { p: "Velocidade máxima em via urbana?", r: "50" },
-      { p: "Placa vermelha significa?", r: "pare" },
-      { p: "Dirigir bêbado é crime?", r: "sim" },
-      { p: "Cinto é obrigatório?", r: "sim" },
-      { p: "Ultrapassar em faixa contínua pode?", r: "nao" },
-      { p: "Pedestre tem preferência?", r: "sim" },
-    ];
-
-    let acertos = 0;
-
-    message.reply("📘 **Prova da CNH iniciada. Responda no chat.**");
-
-    for (const q of perguntas) {
-      await message.channel.send(`❓ ${q.p}`);
-
-      const coletor = await message.channel.awaitMessages({
-        filter: m => m.author.id === message.author.id,
-        max: 1,
-        time: 15000,
-      });
-
-      if (!coletor.size) continue;
-      if (coletor.first().content.toLowerCase().includes(q.r)) acertos++;
-    }
-
-    if (acertos < 4) {
-      save("./data/economia.json", economia);
-      return message.reply(`❌ Reprovado (${acertos}/6). Refaça pagando novamente.`);
-    }
-
-    message.reply(
-      "✅ **Aprovado!** Escolha:\n`!categoriab` (R$5000)\n`!categoriac` (R$8000)"
-    );
-
-    cnhs[message.author.id] = { pendente: true };
-  }
-
-  // ===== CATEGORIA B =====
-  if (cmd === "categoriab") {
-    if (!cnhs[message.author.id]?.pendente)
-      return message.reply("❌ Nenhuma prova aprovada.");
-
-    if (economia[message.author.id].carteira < 5000)
-      return message.reply("❌ Saldo insuficiente.");
-
-    economia[message.author.id].carteira -= 5000;
-
-    cnhs[message.author.id] = {
-      categoria: "B",
-      pontos: 0,
-      status: "ATIVA",
-      validade: "31/12/2026",
-      historico: [],
-    };
-
-    save("./data/cnhs.json", cnhs);
-    save("./data/economia.json", economia);
-
-    message.reply("🚗 CNH categoria **B** emitida!");
-  }
-
-  // ===== CATEGORIA C =====
-  if (cmd === "categoriac") {
-    if (!cnhs[message.author.id]?.pendente)
-      return message.reply("❌ Nenhuma prova aprovada.");
-
-    if (economia[message.author.id].carteira < 8000)
-      return message.reply("❌ Saldo insuficiente.");
-
-    economia[message.author.id].carteira -= 8000;
-
-    cnhs[message.author.id] = {
-      categoria: "C",
-      pontos: 0,
-      status: "ATIVA",
-      validade: "31/12/2026",
-      historico: [],
-    };
-
-    save("./data/cnhs.json", cnhs);
-    save("./data/economia.json", economia);
-
-    message.reply("🚛 CNH categoria **C** emitida!");
-  }
-
   // ===== RENOVAR CNH =====
   if (cmd === "renovarcnh") {
     const cnh = cnhs[message.author.id];
-    if (!cnh) return message.reply("❌ Você não possui CNH.");
+    if (!cnh) return message.reply("❌ Você não possui CNH");
 
-    if (economia[message.author.id].carteira < 2000)
-      return message.reply("❌ Saldo insuficiente.");
+    if (economia[message.author.id].carteira < 1500)
+      return message.reply("❌ Precisa de R$1500");
 
-    economia[message.author.id].carteira -= 2000;
-    cnh.validade = "31/12/2028";
+    economia[message.author.id].carteira -= 1500;
+    cnh.validade = Date.now() + 1000 * 60 * 60 * 24 * 30;
+    cnh.pontos = 20;
+    cnh.status = "ATIVA";
 
     save("./data/cnhs.json", cnhs);
     save("./data/economia.json", economia);
 
-    message.reply("🔄 CNH renovada com sucesso!");
+    message.reply("✅ CNH renovada com sucesso");
   }
 
-  // ===== MULTAR =====
-  if (cmd === "multar") {
-    if (!isPolicia(message.member))
-      return message.reply("❌ Apenas a polícia.");
+  // ===== MULTA =====
+  if (cmd === "multa") {
+    if (!isPolicia(message.member)) return;
 
-    if (!user) return message.reply("❌ Marque um usuário.");
-
-    const pontos = Number(args[1]);
-    if (!pontos) return message.reply("❌ Informe os pontos.");
+    const valor = Number(args[1]);
+    const pontos = Number(args[2]);
+    if (!user || !valor || !pontos) return;
 
     const cnh = cnhs[user.id];
-    if (!cnh) return message.reply("❌ CNH não encontrada.");
+    if (!cnh) return;
 
-    cnh.pontos += pontos;
-    cnh.historico.push({
+    cnh.pontos -= pontos;
+    if (cnh.pontos <= 0) cnh.status = "SUSPENSA";
+
+    multas[user.id] ??= [];
+    multas[user.id].push({
+      policial: message.author.tag,
+      valor,
       pontos,
-      data: new Date().toLocaleDateString(),
+      data: new Date().toLocaleString()
     });
 
-    if (cnh.pontos >= 20) {
-      cnh.status = "CASSADA";
-    }
-
     save("./data/cnhs.json", cnhs);
+    save("./data/multas.json", multas);
 
-    logPolicia(
-      message.guild,
-      "🚨 Multa Aplicada",
-      `👤 ${user.tag}\n📊 Pontos: ${pontos}\n👮 ${message.author.tag}`
-    );
-
-    message.reply("🚨 Multa registrada.");
+    logPolicia(message.guild, message.author, user, valor, pontos);
+    message.reply("🚨 Multa aplicada");
   }
 
-  // ===== CASSAR CNH =====
-  if (cmd === "cassarcnh") {
-    if (!isPolicia(message.member))
-      return message.reply("❌ Apenas a polícia.");
+  // ===== HISTÓRICO =====
+  if (cmd === "historicomultas") {
+    if (!isPolicia(message.member)) return;
 
-    if (!user) return message.reply("❌ Marque um usuário.");
+    const hist = multas[user?.id];
+    if (!hist) return message.reply("Sem multas");
 
-    const cnh = cnhs[user.id];
-    if (!cnh) return message.reply("❌ CNH não encontrada.");
+    const lista = hist.map(
+      (m, i) =>
+        `${i + 1}. 💸 R$${m.valor} | 📊 ${m.pontos} pts\n👮 ${m.policial}`
+    ).join("\n\n");
 
-    cnh.status = "CASSADA";
-    cnh.pontos = 20;
+    const embed = new EmbedBuilder()
+      .setTitle("🧾 Histórico de Multas")
+      .setColor("Orange")
+      .setDescription(lista);
 
-    save("./data/cnhs.json", cnhs);
-
-    message.reply("⛔ CNH cassada.");
+    message.channel.send({ embeds: [embed] });
   }
 
-  // ===== REMOVER CNH =====
+  // ===== SET / REMOVER CNH =====
+  if (cmd === "setcnh") {
+    if (!isPolicia(message.member)) return;
+    const cat = args[1]?.toUpperCase();
+    if (!["B", "C"].includes(cat)) return;
+
+    cnhs[user.id] = {
+      categoria: cat,
+      pontos: 20,
+      status: "ATIVA",
+      validade: Date.now() + 1000 * 60 * 60 * 24 * 30
+    };
+    save("./data/cnhs.json", cnhs);
+    message.reply("✅ CNH setada");
+  }
+
   if (cmd === "removercnh") {
-    if (!isPolicia(message.member))
-      return message.reply("❌ Apenas a polícia.");
-
-    if (!user) return message.reply("❌ Marque um usuário.");
-
+    if (!isPolicia(message.member)) return;
     delete cnhs[user.id];
     save("./data/cnhs.json", cnhs);
-
-    message.reply("🧹 CNH removida.");
+    message.reply("🗑️ CNH removida");
   }
 });
 
